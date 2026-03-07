@@ -1,0 +1,350 @@
+#define PI 3.14159265f
+
+Texture2D gInputImage : register(t0);
+Texture2D gDepthMap   : register(t1);
+Texture2D gNormalMap  : register(t2);
+
+SamplerState gSampler : register(s0);
+
+cbuffer PostProcessSettings : register(b0)
+{
+    // Blur settings
+    float gFocusDistance;
+    float gFocusRange;
+    float gNearBlurStrength;
+    float gFarBlurStrength;
+    
+    // Chromatic Aberration settings
+    float2 gChromaticDirection;
+    float gChromaticIntensity;
+    float gChromaticDistanceScale;
+    
+    float gEffectIntensity; // 0 - no effects, 1 - full effects
+    float gEffectType; // 0 - blur, 1 - aberration, 2 - all
+    float2 gPadding;
+    
+    // Atmosphere settings
+    float3 BetaRayleigh;
+    float RayleighScaleHeight;
+    float3 BetaMieSca;
+    float MieScaleHeight;
+    float3 BetaMieExt;
+    float MieG;
+    float3 SunDirection;
+    float SunIntensity;
+    
+    float GroundLevelY;
+    float AtmosphereTopY;
+    float DensityScale;
+    float _pad0;
+    
+    float3 GroundAlbedo;
+    float _pad1;
+};
+
+cbuffer cbPass : register(b1)
+{
+    float4x4 gView;
+    float4x4 gInvView;
+    float4x4 gProj;
+    float4x4 gInvProj;
+    float4x4 gViewProj;
+    float4x4 gInvViewProj;
+    float3 gEyePosW;
+    float cbPerObjectPad1;
+    float2 gRenderTargetSize;
+    float2 gInvRenderTargetSize;
+    float gNearZ;
+    float gFarZ;
+    float gTotalTime;
+    float gDeltaTime;
+};
+
+float3 RestoreWorldPosition(float2 UV, float depth)
+{
+    //magic DirectX texcoord mutations
+    float4 clipPos;
+    clipPos.x = UV.x * 2.0f - 1.0f;
+    clipPos.y = 1.0f - UV.y * 2.0f;
+    clipPos.z = depth;
+    clipPos.w = 1.0f;
+
+    //transform into world space
+    float4 viewPos = mul(clipPos, gInvViewProj);
+    viewPos.xyz /= viewPos.w;
+
+    return viewPos.xyz;
+}
+
+struct VertexOut
+{
+    float4 PosH : SV_POSITION;
+    float2 TexC : TEXCOORD;
+};
+
+VertexOut VS(uint vid : SV_VertexID)
+{
+    float2 verts[3] =
+    {
+        float2(-1, -1),
+        float2(-1, 3),
+        float2(3, -1)
+    };
+    
+    
+    VertexOut vout;
+    vout.PosH = float4(verts[vid], 0, 1);
+    return vout;
+    
+    return vout;
+}
+
+float4 ChromaticAberration(float2 texCoord, float intensity, float2 direction)
+{
+    float2 texOffset = float2(1.0f / 1280.0f, 1.0f / 720.0f) * intensity;
+    
+    float2 offsetR = direction * texOffset * 1.5f;
+    float2 offsetG = direction * texOffset * 0.5f;
+    float2 offsetB = -direction * texOffset * 1.0f;
+    
+    float r = gInputImage.Sample(gSampler, texCoord + offsetR).r;
+    float g = gInputImage.Sample(gSampler, texCoord + offsetG).g;
+    float b = gInputImage.Sample(gSampler, texCoord + offsetB).b;
+    
+    return float4(r, g, b, 1.0f);
+}
+
+float4 LensBlur(float2 texCoord, float depth)
+{
+    // Focus distance, 0 in focus, >1 out of focus
+    float focusDist = abs(depth - gFocusDistance);
+    float2 direction = float2(1.0, 1.0);
+    
+    float blurStrength = 0.0f;
+    if (depth < gFocusDistance)
+    {
+        blurStrength = smoothstep(0.0, gFocusRange, focusDist) * gNearBlurStrength;
+    }
+    else
+    {
+        blurStrength = smoothstep(0.0, gFocusRange, focusDist) * gFarBlurStrength;
+    }
+    
+    if (blurStrength <= 0.0f)
+        return gInputImage.Sample(gSampler, texCoord);
+    
+    float2 texOffset = float2(1.0f / 1280.0f, 1.0f / 720.0f) * blurStrength;
+    
+    const float weights[5] = { 0.227027f, 0.1945946f, 0.1216216f, 0.054054f, 0.016216f };
+    
+    float4 color = gInputImage.Sample(gSampler, texCoord) * weights[0];
+    
+    for (int i = 1; i < 5; ++i)
+    {
+        float2 offset = direction * texOffset * i;
+        color += gInputImage.Sample(gSampler, texCoord + offset) * weights[i];
+        color += gInputImage.Sample(gSampler, texCoord - offset) * weights[i];
+    }
+    
+    return color;
+}
+
+// slide 17
+float RayleighPhase(float mu)
+{
+    return 3.0f / (16.0f * PI) * (1.0f + mu * mu);
+}
+
+// slide 20
+float MiePhaseHG(float mu, float g)
+{
+    return (1.0f - g * g) / (4.0f * PI * pow(1.0f + g * g - 2.0f * g * mu, 1.5f));
+}
+
+
+// - transmittance � current color is attenuated by the atmosphere (the farther we look, the denser the air -> the darker it becomes through the atmosphere)
+// - inscatter � air molecules scatter light -> a bluish tint, and the direct sunlight is scattered along its path toward you
+struct AerialResult
+{
+    float3 inscatter;
+    float3 transmittance;
+};
+
+AerialResult IntegrateAerial(float3 camPos, float tMax, float3 V, bool isSkyRay)
+{
+    if (isSkyRay)
+    {
+        // ������������ tMax ��� �������������� �����
+        // �������������� ���� ������ ����� ������������ �����
+        float horizonLimit = 50000.0f; // �������� 50 �� ��� ���������
+        tMax = min(tMax, horizonLimit);
+    }
+    
+    tMax = max(tMax, 1.0f); // ������� 1 ����
+    
+    // ���������� ���������� ����� � ����������� �� ����������
+    // ��������������� ������������� ��� ������� �������� ������� ��������
+    int N = 64; // ������������� ���������� ��� ������������
+    
+    // ���������� ��������������� ������������� �����
+    float logStart = 0.1f;
+    float logEnd = log(tMax + 1.0f);
+    float logStep = (logEnd - logStart) / N;
+    
+    float3 AccumulatedLight = float3(0, 0, 0);
+    float3 Transmission = float3(1, 1, 1);
+    
+    float mu = dot(SunDirection, V);
+    float phaseR = RayleighPhase(mu);
+    float phaseM = MiePhaseHG(mu, MieG);
+    
+    float prevLogDist = logStart;
+    
+    [loop]
+    for (int i = 0; i < N; i++)
+    {
+        float currentLogDist = logStart + logStep * (i + 0.5f);
+        float dist = exp(currentLogDist) - 1.0f;
+        float dt = exp(currentLogDist) - exp(prevLogDist);
+        prevLogDist = currentLogDist;
+        
+        if (dist > tMax)
+            break;
+        
+        float3 pos = camPos + V * dist;
+        float h = max(0.0f, pos.y - GroundLevelY);
+        
+        // ��������� � ������������
+        float dR = exp(-h / max(RayleighScaleHeight, 1.0f)) * DensityScale;
+        float dM = exp(-h / max(MieScaleHeight, 1.0f)) * DensityScale;
+        
+        float3 sigma_a = BetaRayleigh * dR + BetaMieExt * dM;
+        
+        // ������������ ������ � ������ ���������
+        // ������������ ������������ ���������� ��� ������� ��������� ������
+        float sunDist = 50000.0f; // ������������� ������� ��������
+        float3 T_light = exp(-sigma_a * sunDist);
+        
+        // �����������
+        float3 S = (phaseR * BetaRayleigh * dR + phaseM * BetaMieSca * dM)
+                   * SunIntensity * T_light;
+        
+        // ���������� � ������ ������� ������������
+        AccumulatedLight += Transmission * S * dt;
+        
+        // ���������� ������������ (���������)
+        Transmission *= exp(-sigma_a * dt);
+        
+        // ������ ����� ���� ������������ ����� ����
+        if (max(Transmission.x, max(Transmission.y, Transmission.z)) < 0.001f)
+            break;
+    }
+    
+    AerialResult r;
+    r.inscatter = AccumulatedLight;
+    r.transmittance = Transmission;
+    
+    float horizonCorrection = 1.0f;
+    float viewDotUp = dot(V, float3(0, 1, 0));
+    
+    if (abs(viewDotUp) < 0.1f) // ����� �������������� ���
+    {
+        // ��������� ����������� ��� ���������
+        horizonCorrection = smoothstep(0.0f, 0.1f, abs(viewDotUp));
+        
+        // ����������� ���������
+        float extraAttenuation = 1.0f - horizonCorrection;
+        r.inscatter *= (1.0f - extraAttenuation * 0.7f);
+        r.transmittance *= (1.0f - extraAttenuation * 0.3f);
+    }
+    
+    return r;
+}
+
+bool IsSkyPixel(float2 UV, float depth, float3 normal)
+{
+    bool isDepthSky = (depth >= 1.0f - 1e-5f);
+    
+    bool isNormalSky = (dot(normal, normal) < 1e-6f);
+    
+    float3 worldPos = RestoreWorldPosition(UV, depth);
+    float distToCamera = length(worldPos - gEyePosW);
+    bool isFarAway = (distToCamera > gFarZ * 0.95f);
+    
+    return (isDepthSky || isNormalSky) && isFarAway;
+}
+
+
+float4 PS(VertexOut pin) : SV_Target
+{
+    uint2 pixelC = pin.PosH.xy;
+    float4 color = gInputImage.Load(int3(pixelC, 0));
+    
+    float depth = gDepthMap.Load(int3(pixelC, 0)).w;
+    float2 UV = (float2) pixelC / gRenderTargetSize;
+    float3 WorldPosition = RestoreWorldPosition(UV, depth);
+    
+    float3 normal = gNormalMap.Load(int3(pixelC, 0)).rgb;
+    float normalLen2 = dot(normal, normal);
+    
+    // *** Atmosphere ***
+    bool isSky = IsSkyPixel(UV, depth, normal);
+
+
+    float3 camPos = gEyePosW;
+    // Infinitely distant background point in the direction of the camera through this pixel (don't write 1.0f or -1.0f as it makes the equation reduce to 0)
+    float3 P_far = RestoreWorldPosition(UV, 0.0f);
+    // Normalized view vector
+    float3 V = normalize(P_far - camPos);
+
+    
+    if (isSky)
+    {
+        float tMaxSky;
+
+        // If V.y > 0 -> the ray is directed upward (into the sky). Then the intersection point of the ray with the upper boundary of the atmosphere is computed as follows
+        if (V.y > 1e-6f)
+        {
+            tMaxSky = (AtmosphereTopY - camPos.y) / V.y;
+        }
+        // If V.y < 0, the ray is looking downward, toward the ground. Look for the intersection point with the lower boundary of the atmosphere
+        else if (V.y < -1e-6f)
+        {
+            float tGround = (GroundLevelY - camPos.y) / V.y;
+            tMaxSky = max(0.0f, tGround);
+        }
+        // If V.y ~ 0, the ray travels almost horizontally; it either does not intersect the atmosphere or will intersect it very far away. Therefore, a very large distance is assigned.
+        else
+            tMaxSky = 50000.f;
+        
+        // Ray marching
+        AerialResult arSky = IntegrateAerial(camPos, tMaxSky, V, isSky);
+        color.rgb = color.rgb * arSky.transmittance + arSky.inscatter;
+    }
+    // Otherwise pixel belongs to a scene object
+    else
+    {
+        // For objects we take tMaxGeo = the distance from the camera to the object. So that the atmosphere is integrated only up to the object, not 50 km ahead
+        float tMaxGeo = length(WorldPosition - camPos);
+    
+        // Ray marching
+        AerialResult arGeo = IntegrateAerial(camPos, tMaxGeo, V, isSky);
+    
+        float3 objColor = color.rgb * arGeo.transmittance;
+    
+        float fogStartDepth = 0.1f;
+        float fogEndDepth = 0.95f;
+        float fogFactor = saturate((depth - fogStartDepth) / max(1e-3f, fogEndDepth - fogStartDepth));
+    
+        float fogIntensity = 10.0f;
+
+        float3 fogAdd = arGeo.inscatter * fogIntensity;
+    
+        color.rgb = objColor + fogAdd * fogFactor;
+    }
+    
+    if (gEffectIntensity <= 0.0f)
+        return color;
+    
+    return color;
+}
