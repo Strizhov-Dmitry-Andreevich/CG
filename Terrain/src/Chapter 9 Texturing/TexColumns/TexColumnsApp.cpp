@@ -100,7 +100,7 @@ public:
 
 
 	float GetWorldSize() const { return mWorldSize; };
-	float Terrain::SampleHeight(float u, float v);
+	float SampleHeight(float u, float v);
 
 private:
 
@@ -754,6 +754,37 @@ void TexColumnsApp::OnMouseDown(WPARAM btnState, int x, int y)
 
 	XMFLOAT2 uv;
 	XMFLOAT3 hit;
+	cam.UpdateViewMatrix();
+	if (RaycastToTerrainUV(x, y, uv, hit))
+	{
+		float height = 0.0f;
+		if (!mTerrain->mHeightData.empty() && mTerrain->mHeightmapWidth > 0 && mTerrain->mHeightmapHeight > 0)
+			height = mTerrain->SampleHeight(uv.x, uv.y) * heightScale;
+		hit.y = 60;
+	
+		auto rItem = std::make_unique<RenderItem>();
+		float scale = 40.0f;
+		XMMATRIX scl = XMMatrixScaling(scale, scale, scale);
+		XMMATRIX trans = XMMatrixTranslation(hit.x, hit.y, hit.z);
+		XMStoreFloat4x4(&rItem->World, scl * trans);
+
+		rItem->Scale = { scale, scale, scale };
+		rItem->ScaleM = scl;
+
+		rItem->ObjCBIndex = static_cast<UINT>(mAllRitems.size());
+		rItem->Geo = mGeometries["shapeGeo"].get();
+		auto sub = rItem->Geo->DrawArgs["sphere"];
+		rItem->IndexCount = sub.IndexCount;
+		rItem->StartIndexLocation = sub.StartIndexLocation;
+		rItem->BaseVertexLocation = sub.BaseVertexLocation;
+		rItem->Mat = mMaterials["TerrainMaterial"].get();
+		rItem->NumFramesDirty = gNumFrameResources;
+		rItem->Name = "TREE";
+		mAllRitems.push_back(std::move(rItem));
+		mOpaqueRitems.push_back(mAllRitems.back().get());
+
+		BuildFrameResources();
+	}
 }
 
 void TexColumnsApp::OnMouseUp(WPARAM btnState, int x, int y)
@@ -3010,6 +3041,43 @@ void TexColumnsApp::DrawShadowDebug(ID3D12GraphicsCommandList* cmdList, UINT siz
 std::vector<std::shared_ptr<Tile>>& Terrain::GetAllTiles()
 {
 	return mAllTiles;
+}
+
+// Sample height from the terrain heightmap using bilinear interpolation.
+// u, v expected in [0,1] range.
+float Terrain::SampleHeight(float u, float v)
+{
+    if (mHeightData.empty() || mHeightmapWidth <= 0 || mHeightmapHeight <= 0)
+        return 0.0f;
+
+    // Clamp UV to [0,1]
+    u = std::min(1.0f, max(0.0f, u));
+    v = std::min(1.0f, max(0.0f, v));
+
+    float fx = u * (mHeightmapWidth - 1);
+    float fy = v * (mHeightmapHeight - 1);
+
+    int x0 = static_cast<int>(floorf(fx));
+    int y0 = static_cast<int>(floorf(fy));
+    int x1 = std::min(x0 + 1, mHeightmapWidth - 1);
+    int y1 = std::min(y0 + 1, mHeightmapHeight - 1);
+
+    float sx = fx - x0;
+    float sy = fy - y0;
+
+    auto getH = [&](int ix, int iy) -> float {
+        return mHeightData[iy * mHeightmapWidth + ix];
+    };
+
+    float h00 = getH(x0, y0);
+    float h10 = getH(x1, y0);
+    float h01 = getH(x0, y1);
+    float h11 = getH(x1, y1);
+
+    float hx0 = h00 * (1.0f - sx) + h10 * sx;
+    float hx1 = h01 * (1.0f - sx) + h11 * sx;
+
+    return hx0 * (1.0f - sy) + hx1 * sy;
 }
 
 void TexColumnsApp::GenerateTileGeometry(const XMFLOAT3& worldPos, float tileSize, int lodLevel,

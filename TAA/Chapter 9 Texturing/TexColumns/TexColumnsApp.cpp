@@ -7,6 +7,7 @@
 #include "../../Common/UploadBuffer.h"
 #include "../../Common/GeometryGenerator.h"
 #include <filesystem>
+#include <unordered_set>
 #include "FrameResource.h"
 #include "RenderingSystem.h"
 #include "GBuffer.h"
@@ -135,10 +136,11 @@ private:
 	void EdgeDetectionPass();
 	void ResolvePass();
 	void FinalTransitionAndPresent();
+    void OutlinePass();
 
 	std::array<const CD3DX12_STATIC_SAMPLER_DESC, 6> GetStaticSamplers();
 
-private:
+private:	
 	std::unordered_map<std::string, unsigned int>ObjectsMeshCount;
 	std::vector<std::unique_ptr<FrameResource>> mFrameResources;
 	FrameResource* mCurrFrameResource = nullptr;
@@ -187,6 +189,12 @@ private:
 	// Render items divided by PSO.
 	std::vector<RenderItem*> mOpaqueRitems;
 	std::vector<RenderItem*> mTerrainTiles;
+
+    // Highlighting / outline
+    std::unordered_set<RenderItem*> mHighlighted;
+    BoundingBox mOutlineVolume;
+    float mOutlineVolumeRadius = 50.0f;
+    float mOutlineScale = 1.06f;
 
 	PassConstants mMainPassCB;
 	DirectX::BoundingFrustum mCamFrustum;
@@ -441,6 +449,30 @@ void TexColumnsApp::Update(const GameTimer& gt)
 	GetLOD();
 
 	currentFrameNum++;
+
+    // Move outline volume in a simple circular trajectory and update highlighted items
+    // Центр объёма смещаем по времени
+    XMFLOAT3 volCenter;
+    volCenter.x = 0.0f + 200.0f * cosf(gt.TotalTime() * 0.5f);
+    volCenter.y = 40.0f;
+    volCenter.z = 0.0f + 200.0f * sinf(gt.TotalTime() * 0.5f);
+
+    mOutlineVolume.Center = volCenter;
+    mOutlineVolume.Extents = XMFLOAT3(mOutlineVolumeRadius, mOutlineVolumeRadius, mOutlineVolumeRadius);
+
+    // Update highlighted set
+    mHighlighted.clear();
+    for (auto& ri : mAllRitems)
+    {
+        BoundingBox localBox = ri->aabb;
+        BoundingBox worldBox;
+        localBox.Transform(worldBox, XMLoadFloat4x4(&ri->World));
+        if (mOutlineVolume.Intersects(worldBox))
+        {
+            mHighlighted.insert(ri.get());
+            ri->NumFramesDirty = gNumFrameResources;
+        }
+    }
 }
 
 void TexColumnsApp::BuildScreenQuadGeometry()
@@ -569,6 +601,65 @@ void TexColumnsApp::GeometryPass()
 
 	// Те же рендер айтемы
 	DrawRenderItems(mCommandList.Get(), mOpaqueRitems, false, false);
+}
+
+void TexColumnsApp::OutlinePass()
+{
+    if (mHighlighted.empty())
+        return;
+
+    // Используем PSO, записывающий в GBuffer, но с фронтальной отбраковкой и без записи в глубину
+    mCommandList->SetPipelineState(mPSOs["outlineGBuffer"].Get());
+    ID3D12DescriptorHeap* descriptorHeaps[] = { mSrvDescriptorHeap.Get() };
+    mCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+    mCommandList->SetGraphicsRootSignature(mGeometryRootSignature.Get());
+
+    auto passCB = mCurrFrameResource->PassCB->Resource();
+    mCommandList->SetGraphicsRootConstantBufferView(3, passCB->GetGPUVirtualAddress());
+
+    UINT objCBByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(ObjectConstants));
+    UINT matCBByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(MaterialConstants));
+
+    auto objectCB = mCurrFrameResource->ObjectCB->Resource();
+    auto matCB = mCurrFrameResource->MaterialCB->Resource();
+
+    for (auto ri : mHighlighted)
+    {
+        // Prepare scaled object constants for outline
+        XMMATRIX world = XMLoadFloat4x4(&ri->World);
+        XMMATRIX scaledWorld = XMMatrixScaling(mOutlineScale, mOutlineScale, mOutlineScale) * world;
+
+        ObjectConstants objConstants;
+        XMStoreFloat4x4(&objConstants.World, XMMatrixTranspose(scaledWorld));
+        XMStoreFloat4x4(&objConstants.InvWorld, MathHelper::InverseTranspose(scaledWorld));
+        XMMATRIX texTransform = XMLoadFloat4x4(&ri->TexTransform);
+        XMStoreFloat4x4(&objConstants.TexTransform, XMMatrixTranspose(texTransform));
+
+        // Override object's CB for this frame
+        mCurrFrameResource->ObjectCB->CopyData(ri->ObjCBIndex, objConstants);
+
+        // Set geometry
+        mCommandList->IASetVertexBuffers(0, 1, &ri->Geo->VertexBufferView());
+        mCommandList->IASetIndexBuffer(&ri->Geo->IndexBufferView());
+        mCommandList->IASetPrimitiveTopology(ri->PrimitiveType);
+
+        // Descriptors
+        CD3DX12_GPU_DESCRIPTOR_HANDLE diffuseHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+        diffuseHandle.Offset(ri->Mat->DiffuseSrvHeapIndex, mCbvSrvDescriptorSize);
+        mCommandList->SetGraphicsRootDescriptorTable(0, diffuseHandle);
+
+        CD3DX12_GPU_DESCRIPTOR_HANDLE normalHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+        normalHandle.Offset(ri->Mat->NormalSrvHeapIndex, mCbvSrvDescriptorSize);
+        mCommandList->SetGraphicsRootDescriptorTable(1, normalHandle);
+
+        D3D12_GPU_VIRTUAL_ADDRESS objCBAddress = objectCB->GetGPUVirtualAddress() + ri->ObjCBIndex * objCBByteSize;
+        D3D12_GPU_VIRTUAL_ADDRESS matCBAddress = matCB->GetGPUVirtualAddress() + ri->Mat->MatCBIndex * matCBByteSize;
+
+        mCommandList->SetGraphicsRootConstantBufferView(2, objCBAddress);
+        mCommandList->SetGraphicsRootConstantBufferView(4, matCBAddress);
+
+        mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
+    }
 }
 
 
@@ -774,6 +865,7 @@ void TexColumnsApp::Draw(const GameTimer& gt)
 {
 	BeginFrame();
 	GeometryPass();
+    OutlinePass();
 	LightingPass();
 	ResolvePass();
 	FinalTransitionAndPresent();
@@ -1373,6 +1465,10 @@ void TexColumnsApp::BuildShadersAndInputLayout()
 	mShaders["gbufferVS"] = d3dUtil::CompileShader(L"Shaders\\GeometryPass.hlsl", nullptr, "VS", "vs_5_1");
 	mShaders["gbufferVSTerrain"] = d3dUtil::CompileShader(L"Shaders\\GeometryPass.hlsl", nullptr, "VSTerrain", "vs_5_1");
 	mShaders["gbufferPS"] = d3dUtil::CompileShader(L"Shaders\\GeometryPass.hlsl", nullptr, "PS", "ps_5_1");
+
+    // Outline pixel shader: writes solid color into GBuffer albedo target
+    // Compile using entrypoint `main`
+    mShaders["outlinePS"] = d3dUtil::CompileShader(L"Shaders\\Outline.hlsl", nullptr, "main", "ps_5_1");
 	mShaders["fullscreenVS"] = d3dUtil::CompileShader(L"Shaders\\LightingPass.hlsl", nullptr, "VS", "vs_5_1");
 	mShaders["lightingPS"] = d3dUtil::CompileShader(L"Shaders\\LightingPass.hlsl", nullptr, "PS", "ps_5_1");
 
@@ -1872,6 +1968,21 @@ void TexColumnsApp::BuildPSOs()
 	geoPsoDesc.RTVFormats[4] = DXGI_FORMAT_R32G32_FLOAT; // Velocity
 
 	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&geoPsoDesc, IID_PPV_ARGS(&mPSOs["gbuffer"])));
+
+	// === Outline PSO (копия geoPsoDesc, но рисуем задние полигоны и без записи в глубину) ===
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC outlinePsoDesc = geoPsoDesc;
+    outlinePsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
+    outlinePsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO; // не записываем глубину
+    // Оставляем DepthEnable = TRUE, чтобы тест глубины работал
+    outlinePsoDesc.DepthStencilState.DepthEnable = TRUE;
+
+    // Use solid outline pixel shader that writes to albedo
+    outlinePsoDesc.PS = {
+        reinterpret_cast<BYTE*>(mShaders["outlinePS"]->GetBufferPointer()),
+        mShaders["outlinePS"]->GetBufferSize()
+    };
+
+    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&outlinePsoDesc, IID_PPV_ARGS(&mPSOs["outlineGBuffer"])));
 
 
 	//
