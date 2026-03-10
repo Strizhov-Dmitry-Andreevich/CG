@@ -82,22 +82,16 @@ float4 PS(VertexOut pin) : SV_Target
 
     float3 toEye = normalize(gEyePosW - posW);
 
-    float4 ambient = gAmbientLight * albedo;
+    float4 ambient = gAmbientLight * float4(albedo.xyz, 1.0f);
 
     Material mat = { albedo, float3(0.04f, 0.04f, 0.04f), 1.0f - roughness }; // ����� ����������� Fresnel
 
     float3 shadowFactor = 1.0f;
     float4 light = ComputeLighting(gLights, mat, posW, normal, toEye, shadowFactor);
-    
 
     float4 finalColor = ambient + light;
     finalColor.a = albedo.a;
 
-    if (roughness > 0.59f)
-    {
-        return float4(0.6902, 0.76863, 0.87059, 1.00);
-    }
     return finalColor;
     //return albedo;
-
 }

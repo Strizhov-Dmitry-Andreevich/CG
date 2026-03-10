@@ -224,9 +224,6 @@
       <FileType>Document</FileType>
     </Text>
   </ItemGroup>
-  <ItemGroup>
-    <FxCompile Include="Shaders\Outline.hlsl" />
-  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
     <Import Project="packages\assimp-v143.5.4.3\build\native\assimp-v143.targets" Condition="Exists('packages\assimp-v143.5.4.3\build\native\assimp-v143.targets')" />

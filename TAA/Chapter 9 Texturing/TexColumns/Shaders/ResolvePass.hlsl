@@ -4,6 +4,8 @@
 Texture2D gHistory : register(t0);
 Texture2D gCurrent : register(t1);
 Texture2D gVelocity : register(t2);
+Texture2D gEdges : register(t3);
+
 
 SamplerState gsamPointClamp : register(s1);
 SamplerState gsamLinearClamp : register(s3);
@@ -38,6 +40,7 @@ float4 AdjustHDRColor(float4 color)
 
 PSOutput PS(VertexOut pin)
 {
+    
     int x;
     int y;
     
@@ -46,11 +49,21 @@ PSOutput PS(VertexOut pin)
     float2 uv = pin.PosH.xy / size;
     PSOutput output;
 
+    // ������� ������� � �������
     float4 currentColor = gCurrent.Load(int3(pin.PosH.xy, 0));
     
-    float2 velocity = gVelocity.Load(int3(pin.PosH.xy, 0)).xy;
-    float2 historyUV = uv - velocity;
+    // �������� ������� ��� ����� �������
+    float edgeValue = gEdges.Load(int3(pin.PosH.xy, 0)).r;
 
+    // ���� �������� �� velocity (� ��������)
+    float2 velocity = gVelocity.Load(int3(pin.PosH.xy, 0)).xy;
+    //gVelocity.
+
+    // ������� ���������� ��� ������� �� �������
+    //float2 historyUV = pin.PosH.xy + float2(velocity.x * 1600., velocity.y * 1080.)/2; // ����� velocity, ����� ����� ���������� ����
+    float2 historyUV = uv - velocity; // ����� velocity, ����� ����� ���������� ����
+
+    // �������� � integer ��� Load
     int2 historyPix = int2(historyUV);
 
     float4 historyColor = gHistory.Sample(gsamPointClamp, historyUV);
@@ -61,19 +74,25 @@ PSOutput PS(VertexOut pin)
     {
         for (int j = -1; j <= 1; j++)
         {
+                //float4 color = gCurrent.Sample(gsamPointClamp, uv + 3*float2(i, j) / size);
             float4 color = gCurrent.Load(int3(pin.PosH.xy, 0) + int3(i, j, 0));
             minColor = min(minColor, color);
             maxColor = max(maxColor, color);
 
         }
     }
-    
     float4 ClampedColor = clamp(historyColor, minColor, maxColor);
     
     float weightHistory = 0.9 * historyColor.a;
     float weightCurr = 0.1 * currentColor.a;
 
+    //float4 blendedColor = ClampedColor * weightHistory + currentColor * weightCurr;
     float4 blendedColor = ClampedColor * 0.9 + currentColor * 0.1;
+    
+    if (edgeValue > 0.5)  // ���� ��� �������
+    {
+        blendedColor.rgb = float3(1.0, 1.0, 1.0);
+    }
     
     output.RT0 = blendedColor;
     return output;

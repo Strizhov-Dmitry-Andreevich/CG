@@ -32,13 +32,13 @@ float4 PS(VertexOut pin) : SV_Target
     float2 texCoord = pin.TexC;
     
     // ����������� �������
-    float3 centerColor = gInputTex.Sample(gsamPointClamp, texCoord).rgb;
+    float3 centerColor = gInputTex.Sample(gsamPointClamp, texCoord).www;
     
     // 4 �������� �������
-    float3 upColor = gInputTex.Sample(gsamPointClamp, texCoord + float2(0, gTexelSize.y)).rgb;
-    float3 downColor = gInputTex.Sample(gsamPointClamp, texCoord - float2(0, gTexelSize.y)).rgb;
-    float3 leftColor = gInputTex.Sample(gsamPointClamp, texCoord - float2(gTexelSize.x, 0)).rgb;
-    float3 rightColor = gInputTex.Sample(gsamPointClamp, texCoord + float2(gTexelSize.x, 0)).rgb;
+    float3 upColor = gInputTex.Sample(gsamPointClamp, texCoord + float2(0, gTexelSize.y)).www;
+    float3 downColor = gInputTex.Sample(gsamPointClamp, texCoord - float2(0, gTexelSize.y)).www;
+    float3 leftColor = gInputTex.Sample(gsamPointClamp, texCoord - float2(gTexelSize.x, 0)).www;
+    float3 rightColor = gInputTex.Sample(gsamPointClamp, texCoord + float2(gTexelSize.x, 0)).www;
     
     // ��������� ������� � �������
     float centerLum = dot(centerColor, float3(0.299, 0.587, 0.114));
@@ -57,5 +57,5 @@ float4 PS(VertexOut pin) : SV_Target
     // ��������� ���������
     float edge = edgeMagnitude > gEdgeThreshold ? 1.0 : 0.0;
     
-    return float4(centerColor, 1.0);
+    return float4(edge, 0.0f, 0.0f, 1.0);
 }

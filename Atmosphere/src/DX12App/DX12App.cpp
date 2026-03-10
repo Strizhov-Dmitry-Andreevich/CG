@@ -353,7 +353,7 @@ void DX12App::Update(const GameTimer& gt)
 
 void DX12App::CalculateSunParameters()
 {
-	float normalizedTime = 0.6f;
+	float normalizedTime = mTimer.TotalTime()/24.0f;
 	float sunAngle = normalizedTime * XM_2PI - XM_PI;
 	float sunHeight = sin(sunAngle);
 	float sunAzimuth = cos(sunAngle);

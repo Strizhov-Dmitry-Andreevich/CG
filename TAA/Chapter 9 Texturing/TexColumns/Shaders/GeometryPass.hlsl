@@ -82,6 +82,7 @@ struct VertexOut
 
 VertexOut VS(VertexIn vin)
 {
+
     VertexOut vout = (VertexOut) 0.0f;
     
     float4 texC = mul(float4(vin.TexC, 0.0f, 1.0f), gTexTransform);
@@ -95,7 +96,7 @@ VertexOut VS(VertexIn vin)
 
     vout.PosH = mul(posW, gViewProj);
     //float2 jitter = GenerateJitter(floor((gTotalTime * 60.) + 50) % 100);
-    float2 jitter = gJitter*0;
+    float2 jitter = gJitter * 0;
     float2 jitterNDC = jitter * 2.0 / gRenderTargetSize;
     vout.PosH.xy += jitterNDC * vout.PosH.w;
     
@@ -150,7 +151,7 @@ GBufferOutput PS(VertexOut pin)
     GBufferOutput output;
 
     float4 texColor = gDiffuseMap.Sample(gsamAnisotropicWrap, pin.TexC);
-    output.Albedo = texColor * gDiffuseAlbedo;
+    output.Albedo = float4((texColor * gDiffuseAlbedo).xyz, 0.0f);
     //output.Albedo = float4(pin.TexC, 0, 0);
 
     float3 normalSample = gNormalMap.Sample(gsamAnisotropicWrap, pin.TexC).rgb;
@@ -160,12 +161,12 @@ GBufferOutput PS(VertexOut pin)
 
     output.WorldPos = float4(pin.PosW, 1.0f);
 
-    output.Roughness = gRoughness;
+    output.Roughness = 0.0f;
     
     float4 posH = mul(float4(pin.PosW, 1.0f), gViewProjRaw);
     float4 prevPosH = mul(float4(pin.PosW, 1.0f), gPrevViewProj);
     
-    float2 currNDC = (posH.xy / posH.w) ;
+    float2 currNDC = (posH.xy / posH.w);
     float2 prevNDC = (prevPosH.xy / prevPosH.w);
 
     // �������� � NDC
