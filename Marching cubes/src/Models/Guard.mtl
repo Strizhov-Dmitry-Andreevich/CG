@@ -1,0 +1,79 @@
+# Blender 4.4.3 MTL File: 'Untitled.blend'
+# www.blender.org
+
+newmtl Banner_m
+Ns 200.000000
+Ka 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 3
+map_Kd Guard/Banner_combined.dds
+map_Bump -bm 1.000000 Guard/Banner_m_Normal_DirectX.dds
+
+newmtl Cloth_m
+Ns 200.000000
+Ka 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 3
+map_Kd Guard/Cloth_combined.dds
+map_Bump -bm 1.000000 Guard/Cloth_m_Normal_DirectX.dds
+
+newmtl DBody_m
+Ns 200.000000
+Ka 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 3
+map_Kd Guard/DBody_combined.dds
+map_Bump -bm 1.000000 Guard/DBody_m_Normal_DirectX.dds
+
+newmtl Details_m
+Ns 200.000000
+Ka 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 3
+map_Kd Guard/Details_combined.dds
+map_Bump -bm 1.000000 Guard/Details_m_Normal_DirectX.dds
+
+newmtl Glass_m
+Ns 200.000000
+Ka 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 3
+map_Kd Guard/Glass_m_Base_Color.dds
+map_Bump -bm 1.000000 Guard/Glass_m_Normal_DirectX.dds
+
+newmtl Shovel_m
+Ns 200.000000
+Ka 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 3
+map_Kd Guard/Shovel_combined.dds
+map_Bump -bm 1.000000 Guard/Shovel_m_Normal_DirectX.dds
+
+newmtl UPBody_m
+Ns 200.000000
+Ka 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 3
+map_Kd Guard/UPBody_combine.dds
+map_Bump -bm 1.000000 Guard/UPBody_m_Normal_DirectX.dds
